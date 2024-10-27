@@ -2,6 +2,8 @@ package data
 
 import "bitcask-go/fio"
 
+const DataFileNameSuffix = ".data"
+
 // Data files
 type DataFile struct {
 	FileId uint32			
@@ -22,6 +24,6 @@ func (df *DataFile) Sync() error {
 	return nil
 }
 
-func (df *DataFile) ReadLogRecord(offset uint64) (*LogRecord, error) {
-	return nil, nil
+func (df *DataFile) ReadLogRecord(offset uint64) (*LogRecord, uint64, error) {
+	return nil, 0, nil
 }

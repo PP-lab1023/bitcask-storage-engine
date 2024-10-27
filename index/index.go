@@ -20,6 +20,28 @@ type Indexer interface {
 	Delete(key []byte) bool
 }
 
+type IndexType = int8
+const (
+	// BTree index
+	Btree IndexType = iota + 1
+
+	// Adaptive radix tree
+	ART
+)
+
+// Initialize index according to the IndexType
+func NewIndexer(typ IndexType) Indexer {
+	switch typ {
+	case Btree:
+		return NewBTree()
+	case ART:
+		// todo
+		return nil
+	default:
+		panic("unsupported index type")
+	}
+}
+
 // Type Item in BTree is an interface
 type Item struct {
 	key []byte

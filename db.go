@@ -3,6 +3,12 @@ package kvproject
 import (
 	"bitcask-go/data"
 	"bitcask-go/index"
+	"errors"
+	"io"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -10,9 +16,60 @@ import (
 type DB struct {
 	options Options
 	mu *sync.RWMutex
+	fileIds []int                           // Can only be used when loading index, cannot be used or updated in other places
 	activeFile *data.DataFile 				// Current active file, can be written in
 	olderFiles map[uint32]*data.DataFile    // Old files, can only be read
 	index index.Indexer
+}
+
+// Open bitcask storage engine instance
+func Open(options Options) (*DB, error) {
+	// Verify the configuration items passed in by the user
+	if err := checkOptions(options); err != nil {
+		return nil, err
+	}
+	
+	// Judge if DirPath exists
+	// If not exits, construct
+	if _, err := os.Stat(options.DirPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(options.DirPath, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	// Initialize DB instance
+	db := &DB{
+		options: options,
+		mu: new(sync.RWMutex),
+		olderFiles: make(map[uint32]*data.DataFile),
+		index: index.NewIndexer(options.IndexType),
+	}
+
+	// Load data file
+	// These are files to be appended (log files)
+	// Actually, log files are data files. They are the same thing.
+	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// Load index from data files
+	if err := db.loadIndexFromDataFiles(); err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
+
+func checkOptions(options Options) error {
+	if options.DirPath == "" {
+		return errors.New("database dir path is empty")
+	}
+
+	if options.DataFileSize <= 0 {
+		return errors.New("database data file size must be positive")
+	}
+
+	return nil
 }
 
 // Write key/value, key cannot be nil
@@ -76,7 +133,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// Read corresponding data according to offset
-	logRecord, err := dataFile.ReadLogRecord(logRecordPos.Offset)
+	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -158,3 +215,102 @@ func (db *DB) setActiveDataFile() error{
 	db.activeFile = dataFile
 	return nil
 }
+
+// Load data files from disk
+func (db *DB) loadDataFiles() error {
+	dirEntries, err := os.ReadDir(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+
+	var fileIds []int
+	// Iterate over all the files in the directory
+	// Find all the files ended with .data
+	for _, entry := range dirEntries {
+		if strings.HasSuffix(entry.Name(), data.DataFileNameSuffix) {
+			// Parse file name
+			// Data file name is like 0001.data
+			splitNames := strings.Split(entry.Name(), ".")
+			fileId, err := strconv.Atoi(splitNames[0])
+			if err != nil {
+				// There are some files in the directory with .data suffix but its name is not a number
+				// This is not allowed
+				return ErrDataDirectoryCorrupted
+			}
+			fileIds = append(fileIds, fileId)
+		}
+	}
+
+	// Sort id, load in order from small to large
+	sort.Ints(fileIds)
+	db.fileIds = fileIds
+
+	// Iterate over all the fileIds, Open corresponding data file
+	for i, fid := range fileIds {
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
+		if err != nil {
+			return err
+		}
+
+		if i == len(fileIds) - 1 {
+			// The last one, which means it's current active file
+			db.activeFile = dataFile
+		} else {
+			db.olderFiles[uint32(fid)] = dataFile
+		}
+	}
+	return nil
+}
+
+// Load index from data files
+// Use fileIds to iterate over all the records in files
+func (db *DB) loadIndexFromDataFiles() error {
+	// No files, which means the database is empty
+	if len(db.fileIds) == 0 {
+		return nil
+	}
+	
+	// Iterate over all the fileIds
+	for i, fid := range db.fileIds {
+		var fileId = uint32(fid)
+		var dataFile *data.DataFile
+		if fileId == db.activeFile.FileId {
+			dataFile = db.activeFile
+		} else {
+			dataFile = db.olderFiles[fileId]
+		}
+
+		// Iterate over all the records in the file
+		var offset uint64 = 0
+		for {
+			logRecord, size, err := dataFile.ReadLogRecord(offset) 
+			if err != nil {
+				// There are two possibilities:
+				// 1. Something go wrong, just return the error
+				// 2. Reach the end of the file. This is normal. Should get out of the loop
+				if err == io.EOF {
+					break
+				}
+				return err
+			}
+			// Construct in-memory index
+			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
+			if logRecord.Type == data.LogRecordDeleted {
+				db.index.Delete(logRecord.Key)
+			} else {
+				db.index.Put(logRecord.Key, logRecordPos)
+			}
+
+			// Update offset
+			offset += size
+		}
+
+		// If it is current active file
+		// Update writeoff
+		if i == len(db.fileIds) - 1 {
+			db.activeFile.WriteOff = offset
+		}
+	}
+	return nil
+}
+
