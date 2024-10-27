@@ -101,6 +101,35 @@ func (db *DB) Put(key []byte, value []byte) error{
 
 }
 
+// Delete corresponding data according to the key
+func (db *DB) Delete(key []byte) error{
+	// Judge validation of the key
+	if len(key) ==  0{
+		return ErrKeyIsEmpty
+	}
+
+	// Examine if the key exists
+	// If not exist, there is no need to write this log record
+	if pos := db.index.Get(key); pos == nil {
+		return nil
+	}
+
+	// The key exists, construct corresponding log record
+	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
+	_, err := db.appendLogRecord(logRecord)
+	if err != nil {
+		return err
+	}
+
+	// Delete the key in the in-memory index
+	ok := db.index.Delete(key)
+	if !ok {
+		return ErrIndexUpdateFailed
+	}
+
+	return nil
+}
+
 // Get value according to key
 func (db *DB) Get(key []byte) ([]byte, error) {
 	// Add read lock
