@@ -17,4 +17,13 @@ type IOManager interface {
 
 	// CLose the file
 	Close() error
+
+	// Get size of the file 
+	Size() (int64, error)
 }
+
+// Initialize IOManager, only support standard FileIO
+func NewIOManager(filename string) (IOManager, error) {
+	return NewFileIOManager(filename)
+}
+

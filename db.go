@@ -162,7 +162,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// Read corresponding data according to offset
-	logRecord, _, err := dataFile.ReadLogRecord(logRecordPos.Offset)
+	logRecord, _, err := dataFile.ReadLogRecord(int64(logRecordPos.Offset))
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	}
 
 	// Encode logRecord
-	encRecord, size := data.EncodelogRecord(logRecord)
+	encRecord, size := data.EncodeLogRecord(logRecord)
 
 	// If written data reaches the limit of the active file,
 	// then close the active file and open a new file
@@ -310,9 +310,9 @@ func (db *DB) loadIndexFromDataFiles() error {
 		}
 
 		// Iterate over all the records in the file
-		var offset uint64 = 0
+		var offset int64 = 0
 		for {
-			logRecord, size, err := dataFile.ReadLogRecord(offset) 
+			logRecord, size, err := dataFile.ReadLogRecord(int64(offset)) 
 			if err != nil {
 				// There are two possibilities:
 				// 1. Something go wrong, just return the error
