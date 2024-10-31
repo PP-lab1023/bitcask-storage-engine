@@ -20,6 +20,7 @@ type DB struct {
 	activeFile *data.DataFile 				// Current active file, can be written in
 	olderFiles map[uint32]*data.DataFile    // Old files, can only be read
 	index index.Indexer
+	seqNo uint64							// Transaction serial number
 }
 
 // Open bitcask storage engine instance
@@ -81,13 +82,13 @@ func (db *DB) Put(key []byte, value []byte) error{
 
 	// Build struct LogRecord 
 	logRecord := &data.LogRecord{
-		Key: key,
+		Key: logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Value: value,
 		Type: data.LogRecordNormal, 
 	}
 
 	// Append to the current active file
-	pos, err := db.appendLogRecord(logRecord)
+	pos, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -115,8 +116,11 @@ func (db *DB) Delete(key []byte) error{
 	}
 
 	// The key exists, construct corresponding log record
-	logRecord := &data.LogRecord{Key: key, Type: data.LogRecordDeleted}
-	_, err := db.appendLogRecord(logRecord)
+	logRecord := &data.LogRecord{
+		Key: logRecordKeyWithSeq(key, nonTransactionSeqNo), 
+		Type: data.LogRecordDeleted,
+	}
+	_, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -145,15 +149,52 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	logRecordPos := db.index.Get(key)
 	// If key is not in the in-memory index, key doesn't exist
 	if logRecordPos == nil {
-		return nil, ErrKeyNotFind
+		return nil, ErrKeyNotFound
 	}
 
+	// Get value from data file
+	return db.getValueByPosition(logRecordPos)
+}
+
+// Get all the keys in the database
+func (db *DB) ListKeys() [][]byte {
+	iterator := db.index.Iterator(false)
+	keys := make([][]byte, db.index.Size())
+	var idx int
+	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+		keys[idx] = iterator.Key()
+		idx++
+	}
+	return keys
+}
+
+// Get all data and perform user-specified operations
+// If fn return false, terminate iteration
+func (db *DB) Fold(fn func(key []byte, value []byte) bool) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	iterator := db.index.Iterator(false)
+	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
+		value, err := db.getValueByPosition(iterator.Value())
+		if err != nil {
+			return err
+		}
+		if !fn(iterator.Key(), value) {
+			break
+		}
+	}
+	return nil
+} 
+
+// Get value by logRecordPos
+func (db *DB) getValueByPosition(pos *data.LogRecordPos) ([]byte, error) {
 	// Find data file according to file id
 	var dataFile *data.DataFile
-	if db.activeFile.FileId == logRecordPos.Fid {
+	if db.activeFile.FileId == pos.Fid {
 		dataFile = db.activeFile
 	} else {
-		dataFile = db.olderFiles[logRecordPos.Fid]
+		dataFile = db.olderFiles[pos.Fid]
 	}
 
 	// Data file is nil
@@ -162,24 +203,28 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 
 	// Read corresponding data according to offset
-	logRecord, _, err := dataFile.ReadLogRecord(int64(logRecordPos.Offset))
+	logRecord, _, err := dataFile.ReadLogRecord(int64(pos.Offset))
 	if err != nil {
 		return nil, err
 	}
 
 	// Judge if the key is deleted
 	if logRecord.Type == data.LogRecordDeleted {
-		return nil, ErrKeyNotFind
+		return nil, ErrKeyNotFound
 	}
 
 	return logRecord.Value, nil
 }
 
-// append logRecord to active file
-func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error){
+// append logRecord to active file with lock
+func (db *DB) appendLogRecordWithLock(logRecord *data.LogRecord) (*data.LogRecordPos, error){
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	return db.appendLogRecord(logRecord)
+}
 
+// append logRecord to active file
+func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error){
 	// Judge if current active file exists
 	// because when there is no write to the database, there is no active file
 	// If not exists, initialize
@@ -298,6 +343,25 @@ func (db *DB) loadIndexFromDataFiles() error {
 	if len(db.fileIds) == 0 {
 		return nil
 	}
+
+	// Put data to the indexer
+	// Key should not contain seqNo
+	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
+		var ok bool
+		if typ == data.LogRecordDeleted {
+			ok = db.index.Delete(key)
+		} else if typ == data.LogRecordNormal{
+			ok = db.index.Put(key, pos)
+		}
+		if !ok {
+			panic("fail to update index at startup")
+		}
+	}
+
+	// Temporarily save transaction data
+	// The seqNo maps to a slice of transaction records
+	transactionRecords := make(map[uint64][]*data.TransactionRecord)
+	var currentSeqNo = nonTransactionSeqNo
 	
 	// Iterate over all the fileIds
 	for i, fid := range db.fileIds {
@@ -322,12 +386,38 @@ func (db *DB) loadIndexFromDataFiles() error {
 				}
 				return err
 			}
+
 			// Construct in-memory index
 			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
-			if logRecord.Type == data.LogRecordDeleted {
-				db.index.Delete(logRecord.Key)
+
+			// Decode key and get transaction serial number
+			realKey, seqNo := parseLogRecordKey(logRecord.Key)
+			if seqNo == nonTransactionSeqNo {
+				// Not written in by batch, just update the in-memory indexer
+				updateIndex(realKey, logRecord.Type, logRecordPos)
 			} else {
-				db.index.Put(logRecord.Key, logRecordPos)
+				// Written in by batch, need to protect atomic consistency
+				if logRecord.Type == data.LogRecordFinished {
+					// The transaction is completed.
+					// Corresponding seqNo data can be updated to the in-memory indexer
+					for _, txnRecord := range transactionRecords[seqNo] {
+						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, txnRecord.Pos)
+					}
+					delete(transactionRecords, seqNo)
+				} else {
+					// Data written in by batch
+					// Don't know whether the transaction containing it is successful or not
+					logRecord.Key = realKey // The Key of the logRecord should be changed to realKey. Because the if above use this value to update
+					transactionRecords[seqNo] = append(transactionRecords[seqNo], &data.TransactionRecord{
+						Record: logRecord,
+						Pos: logRecordPos,
+					})
+				}
+			}
+
+			// Update transaction seqNo
+			if seqNo > currentSeqNo {
+				currentSeqNo = seqNo
 			}
 
 			// Update offset
@@ -340,6 +430,41 @@ func (db *DB) loadIndexFromDataFiles() error {
 			db.activeFile.WriteOff = offset
 		}
 	}
+
+	// Update seqNo in db
+	db.seqNo = currentSeqNo
+
 	return nil
 }
 
+// Close the database
+func (db *DB) Close() error {	
+	if db.activeFile == nil {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	//	Close current active file
+	if err := db.activeFile.Close(); err != nil {
+		return err
+	}
+	// Close older files
+	for _, file := range db.olderFiles {
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Make database persistent 
+func (db *DB) Sync() error {
+	if db.activeFile == nil {
+		return nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.activeFile.Sync()
+}

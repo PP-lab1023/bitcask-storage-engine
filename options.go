@@ -28,7 +28,35 @@ const (
 
 var DefaultOptions = Options{
 	DirPath: os.TempDir(),
-	DataFileSize: 356 * 1024 *1024,  //256MB
+	DataFileSize: 256 * 1024 *1024,  //256MB
 	SyncWrite: false,
 	IndexType: Btree,
+}
+
+// Options of iterator
+type IteratorOptions struct {
+	// Traverse the keys whose prefix is the specified value. Empty by default.
+	Prefix []byte
+
+	// Reversed? Default is false
+	Reverse bool
+}
+
+var DefaultIteratorOptions = IteratorOptions{
+	Prefix: nil,
+	Reverse: false,
+}
+
+// Options for batch writing
+type WriteBatchOptions struct {
+	// The maximum amount of data in a batch
+	MaxBatchNum uint 
+
+	// Persist when committing a transaction?
+	SyncWrites bool
+}
+
+var DefaultWriteBatchOptions = WriteBatchOptions {
+	MaxBatchNum: 10000,
+	SyncWrites: true,
 }

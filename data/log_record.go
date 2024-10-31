@@ -11,6 +11,7 @@ type LogRecordType = byte
 const (
 	LogRecordNormal LogRecordType = iota
 	LogRecordDeleted
+	LogRecordFinished
 )
 
 // crc type(deleted?) keySize valueSize
@@ -39,6 +40,12 @@ type logRecordHeader struct {
 	recordType LogRecordType    // Deletion?
 	keySize uint32              // length of key
 	valueSize uint32            // length of value
+}
+
+// Temporarily saved data related to transaction
+type TransactionRecord struct {
+	Record *LogRecord
+	Pos *LogRecordPos
 }
 
 // Encode LogRecord, return a byte array and its length
