@@ -9,7 +9,13 @@ import (
 	"path/filepath"
 )
 
-const DataFileNameSuffix = ".data"
+const (
+	DataFileNameSuffix = ".data"
+	HintFileName = "hint-index"
+	MergeFinishedFileName = "merge.finished"
+)
+
+
 var (
 	ErrInvalidCRC = errors.New("invalid crc value, log record may be corrupted")
 )
@@ -24,8 +30,27 @@ type DataFile struct {
 // Open new file
 func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
 	// Format fileId as an integer and pad it with 0 on the left to ensure the final generated string is 9 digits in length
-	fileName := filepath.Join(dirPath, fmt.Sprintf("%09d", fileId) + DataFileNameSuffix) 
+	fileName := GetDataFileName(dirPath, fileId)
+	return newOpenFile(fileName, fileId)
+}
 
+// Open hint index file
+func OpenHintFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, HintFileName)
+	return newOpenFile(fileName, 0)
+}
+
+// Open the file which indicates the end of merge
+func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, MergeFinishedFileName)
+	return newOpenFile(fileName, 0)
+}
+
+func GetDataFileName(dirPath string, fileId uint32) string {
+	return filepath.Join(dirPath, fmt.Sprintf("%09d", fileId) + DataFileNameSuffix) 
+}
+
+func newOpenFile(fileName string, fileId uint32) (*DataFile, error) {
 	// Initialize IOManager
 	ioManager, err := fio.NewIOManager(fileName)
 	if err != nil {
@@ -38,7 +63,7 @@ func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
 	}, nil
 }
 
-// 
+
 func (df *DataFile) Write(buf []byte) error {
 	n, err := df.IoManager.Write(buf)
 	if err != nil {
@@ -46,6 +71,16 @@ func (df *DataFile) Write(buf []byte) error {
 	}
 	df.WriteOff += int64(n)
 	return nil
+}
+
+// Write index information to hint file
+func (df *DataFile) WriteHintRecord(key []byte, pos *LogRecordPos) error {
+	record := &LogRecord{
+		Key: key,
+		Value: EncodeLogRecordPos(pos),
+	}
+	encRecord, _ := EncodeLogRecord(record)
+	return df.Write(encRecord)
 }
 
 func (df *DataFile) Sync() error {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ type DB struct {
 	olderFiles map[uint32]*data.DataFile    // Old files, can only be read
 	index index.Indexer
 	seqNo uint64							// Transaction serial number
+	isMerging bool							// Only one merge is allowed at the same time
 }
 
 // Open bitcask storage engine instance
@@ -46,10 +48,20 @@ func Open(options Options) (*DB, error) {
 		index: index.NewIndexer(options.IndexType),
 	}
 
+	// Load merge directory
+	if err := db.loadMergeFiles(); err != nil {
+		return nil, err
+	}
+
 	// Load data file
 	// These are files to be appended (log files)
 	// Actually, log files are data files. They are the same thing.
 	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// Load data from hint file
+	if err := db.loadIndexFromHintFile(); err != nil {
 		return nil, err
 	}
 
@@ -344,6 +356,18 @@ func (db *DB) loadIndexFromDataFiles() error {
 		return nil
 	}
 
+	// Get the first file which has not been merged
+	hasMerged, nonMergeFileId := false, uint32(0)
+	mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
+	if _, err := os.Stat(mergeFinFileName); err == nil {
+		fid, err := db.getNonMergeFileId(db.options.DirPath)
+		if err != nil {
+			return err
+		}
+		hasMerged = true
+		nonMergeFileId = fid
+	}
+
 	// Put data to the indexer
 	// Key should not contain seqNo
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
@@ -366,6 +390,13 @@ func (db *DB) loadIndexFromDataFiles() error {
 	// Iterate over all the fileIds
 	for i, fid := range db.fileIds {
 		var fileId = uint32(fid)
+
+		if hasMerged && fileId < nonMergeFileId {
+			// This file has been merged
+			// It is loaded from hint file
+			continue
+		}
+
 		var dataFile *data.DataFile
 		if fileId == db.activeFile.FileId {
 			dataFile = db.activeFile

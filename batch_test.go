@@ -89,7 +89,7 @@ func TestDB_WriteBatch3(t *testing.T) {
 	dir := "/tmp/bitcask-go-batch-3"
 	opts.DirPath = dir
 	db, err := Open(opts)
-	// defer destroyDB(db)
+	defer destroyDB(db)
 	assert.Nil(t, err)
 	assert.NotNil(t, db)
 
@@ -107,6 +107,4 @@ func TestDB_WriteBatch3(t *testing.T) {
 	}
 	err = wb.Commit()
 	assert.Nil(t, err)
-
-	
 }
