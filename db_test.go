@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -299,4 +300,43 @@ func TestDB_Sync(t *testing.T) {
 
 	err = db.Sync()
 	assert.Nil(t, err)
+}
+
+func TestDB_FileLock(t *testing.T) {
+	opts := DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-filelock")
+	opts.DirPath = dir
+	opts.DataFileSize = 64 * 1024 * 1024
+	db, err := Open(opts)
+	defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	// Try open a database on this path again
+	db2, err := Open(opts)
+	t.Log(err)
+	t.Log(db2)
+	assert.Equal(t, err, ErrDatabaseIsInUse)
+	assert.Nil(t, db2)
+
+	// Close the db before and open this path again
+	err = db.Close()
+	assert.Nil(t, err)
+	db2, err = Open(opts)
+	t.Log(err)
+	assert.Nil(t, err)
+	assert.NotNil(t, db2)
+	err = db2.Close()
+	assert.Nil(t, err)
+}
+
+func TestDB_Open(t *testing.T) {
+	opts := DefaultOptions
+	opts.DirPath = "/tmp/bitcask-go"
+	// opts.MMapAtStartUp = false
+	now := time.Now()
+	db, err := Open(opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+	t.Log("open time ", time.Since(now))
 }

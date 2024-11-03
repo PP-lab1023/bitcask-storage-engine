@@ -13,8 +13,14 @@ type Options struct {
 	// Is it necessary to immediately make data persistent after every write?
 	SyncWrite bool
 
+	// How many bytes are written in total before being persisted?
+	BytesPerSync uint
+
 	// Index type
 	IndexType IndexerType
+
+	// Use mmap when start up?
+	MMapAtStartUp bool
 }
 
 type IndexerType = int8
@@ -33,7 +39,9 @@ var DefaultOptions = Options{
 	DirPath: os.TempDir(),
 	DataFileSize: 256 * 1024 *1024,  //256MB
 	SyncWrite: false,
+	BytesPerSync: 0,
 	IndexType: Btree,
+	MMapAtStartUp: true,
 }
 
 // Options of iterator

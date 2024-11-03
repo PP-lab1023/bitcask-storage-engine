@@ -2,6 +2,15 @@ package fio
 
 const DataFilePerm = 0644
 
+type FileIOType = byte
+const (
+	// Standard file IO
+	StandardFIO FileIOType = iota
+
+	// Memory file mapping
+	MemoryMap
+)
+
 // Abstract IOManager interface
 // Enable different IO types
 // But only standard file IO for now
@@ -23,7 +32,15 @@ type IOManager interface {
 }
 
 // Initialize IOManager, only support standard FileIO
-func NewIOManager(filename string) (IOManager, error) {
-	return NewFileIOManager(filename)
+func NewIOManager(filename string, ioType FileIOType) (IOManager, error) {
+	switch ioType {
+	case StandardFIO:
+		return NewFileIOManager(filename)
+	case MemoryMap:
+		return NewMMapIOManager(filename)
+	default:
+		panic("unsupported IO type")
+	}
+	
 }
 

@@ -29,37 +29,37 @@ type DataFile struct {
 }
 
 // Open new file
-func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
+func OpenDataFile(dirPath string, fileId uint32, ioType fio.FileIOType) (*DataFile, error) {
 	// Format fileId as an integer and pad it with 0 on the left to ensure the final generated string is 9 digits in length
 	fileName := GetDataFileName(dirPath, fileId)
-	return newOpenFile(fileName, fileId)
+	return newOpenFile(fileName, fileId, ioType)
 }
 
 // Open hint index file
 func OpenHintFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, HintFileName)
-	return newOpenFile(fileName, 0)
+	return newOpenFile(fileName, 0, fio.StandardFIO)
 }
 
 // Open the file which indicates the end of merge
 func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, MergeFinishedFileName)
-	return newOpenFile(fileName, 0)
+	return newOpenFile(fileName, 0, fio.StandardFIO)
 }
 
 // Open the file which saves seqNo
 func OpenSeqNoFile(dirPath string) (*DataFile, error) {
 	fileName := filepath.Join(dirPath, SeqNoFileName)
-	return newOpenFile(fileName, 0)
+	return newOpenFile(fileName, 0, fio.StandardFIO)
 }
 
 func GetDataFileName(dirPath string, fileId uint32) string {
 	return filepath.Join(dirPath, fmt.Sprintf("%09d", fileId) + DataFileNameSuffix) 
 }
 
-func newOpenFile(fileName string, fileId uint32) (*DataFile, error) {
+func newOpenFile(fileName string, fileId uint32, ioType fio.FileIOType) (*DataFile, error) {
 	// Initialize IOManager
-	ioManager, err := fio.NewIOManager(fileName)
+	ioManager, err := fio.NewIOManager(fileName, ioType)
 	if err != nil {
 		return nil, err
 	}
@@ -166,4 +166,16 @@ func (df *DataFile) readNBytes(n int64, offset int64) (b []byte, err error) {
 	b = make([]byte, n)
 	_, err = df.IoManager.Read(b, offset)
 	return b, err
+}
+
+func (df *DataFile) SetIOManager(driPath string, ioTpye fio.FileIOType) error {
+	if err := df.IoManager.Close(); err != nil {
+		return err
+	}
+	ioManager, err := fio.NewIOManager(GetDataFileName(driPath, df.FileId), ioTpye)
+	if err != nil {
+		return err
+	}
+	df.IoManager = ioManager
+	return nil
 }

@@ -2,8 +2,10 @@ package kvproject
 
 import (
 	"bitcask-go/data"
+	"bitcask-go/fio"
 	"bitcask-go/index"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,9 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/gofrs/flock"
 )
 
-const seqNoKey = "seq.no"
+const (
+	seqNoKey = "seq.no"
+	fileLockName = "flock"
+)
 
 // Database-oriented interface
 type DB struct {
@@ -27,6 +34,8 @@ type DB struct {
 	isMerging bool							// Only one merge is allowed at the same time
 	seqNoFileExists bool					// The file which saves seqNo exists?
 	isinitial bool							// Is it the first time tp initialize the database?
+	fileLock *flock.Flock					// File lock ensures mutual exclusion between multiple processes
+	bytesWrite uint							// The number of bytes have been written so far
 }
 
 // Open bitcask storage engine instance
@@ -47,6 +56,18 @@ func Open(options Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	// Judge if current path is in use
+	fileLock := flock.New(filepath.Join(options.DirPath, fileLockName))
+	hold, err := fileLock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !hold {
+		// Other process is using this path
+		return nil, ErrDatabaseIsInUse
+	}
+
 	entries, err := os.ReadDir(options.DirPath)
 	if err != nil {
 		return nil, err
@@ -65,6 +86,7 @@ func Open(options Options) (*DB, error) {
 		olderFiles: make(map[uint32]*data.DataFile),
 		index: index.NewIndexer(options.IndexType, options.DirPath, options.SyncWrite),
 		isinitial: isinitial,
+		fileLock: fileLock,
 	}
 
 	// Load merge directory
@@ -89,6 +111,14 @@ func Open(options Options) (*DB, error) {
 		// Load index from data files
 		if err := db.loadIndexFromDataFiles(); err != nil {
 			return nil, err
+		}
+
+		// Reset IO type as file IO
+		// B+ tree saves index on disk. Won't use mmap
+		if db.options.MMapAtStartUp {
+			if err := db.resetIoType(); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		// Get current seqNo
@@ -313,10 +343,21 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 		return nil, err
 	}
 
-	// Determine if it is necessary to make data persistent according to user's option
-	if db.options.SyncWrite {
+	db.bytesWrite += uint(size)
+
+	// If user sets SyncWrite as true, it needs to sync after every write
+	var needSync = db.options.SyncWrite
+	if !needSync && db.options.BytesPerSync > 0 && db.bytesWrite >= db.options.BytesPerSync{
+		// User doesn't set SyncWrite as true, but wants to sync after some bytes
+		needSync = true
+	}
+	if needSync { 
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
+		}
+		if db.bytesWrite > 0 {
+			// Clear accumulated value
+			db.bytesWrite = 0
 		}
 	}
 
@@ -335,7 +376,7 @@ func (db *DB) setActiveDataFile() error{
 	}
 
 	// Open new file
-	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileId)
+	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileId, fio.StandardFIO)
 	if err != nil {
 		return err
 	}
@@ -374,7 +415,11 @@ func (db *DB) loadDataFiles() error {
 
 	// Iterate over all the fileIds, Open corresponding data file
 	for i, fid := range fileIds {
-		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
+		ioType := fio.StandardFIO
+		if db.options.MMapAtStartUp {
+			ioType = fio.MemoryMap
+		}
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid), ioType)
 		if err != nil {
 			return err
 		}
@@ -535,6 +580,12 @@ func (db *DB) loadSeqNo() error {
 
 // Close the database
 func (db *DB) Close() error {	
+	defer func(){
+		if err := db.fileLock.Unlock(); err != nil {
+			panic(fmt.Sprintf("failed to unlock the directory, %v", err))
+		}
+	}()
+
 	if db.activeFile == nil {
 		return nil
 	}
@@ -588,4 +639,22 @@ func (db *DB) Sync() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	return db.activeFile.Sync()
+}
+
+// Set IO type as standard file IO
+func (db *DB) resetIoType() error {
+	if db.activeFile == nil {
+		return nil
+	}
+
+	if err := db.activeFile.SetIOManager(db.options.DirPath, fio.StandardFIO); err != nil {
+		return err
+	}
+
+	for _, dataFile := range db.olderFiles {
+		if err := dataFile.SetIOManager(db.options.DirPath, fio.StandardFIO); err != nil {
+			return err
+		}
+	}
+	return nil
 }
