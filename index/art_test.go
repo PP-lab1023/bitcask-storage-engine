@@ -9,9 +9,17 @@ import (
 
 func TestAdaptiveRadixTree_Put(t *testing.T) {
 	art := NewART()
-	art.Put([]byte("key-1"), &data.LogRecordPos{Fid: 1, Offset: 12})
-	art.Put([]byte("key-2"), &data.LogRecordPos{Fid: 1, Offset: 12})
-	art.Put([]byte("key-3"), &data.LogRecordPos{Fid: 1, Offset: 12})
+	res1 := art.Put([]byte("key-1"), &data.LogRecordPos{Fid: 1, Offset: 12})
+	assert.Nil(t, res1)
+	res2 := art.Put([]byte("key-2"), &data.LogRecordPos{Fid: 1, Offset: 12})
+	assert.Nil(t, res2)
+	res3 := art.Put([]byte("key-3"), &data.LogRecordPos{Fid: 1, Offset: 12})
+	assert.Nil(t, res3)
+
+	res4 := art.Put([]byte("key-3"), &data.LogRecordPos{Fid: 2, Offset: 13})
+	t.Log(res4)
+	assert.Equal(t, res4.Fid, uint32(1))
+	assert.Equal(t, res4.Offset, int64(12))
 }
 
 func TestAdaptiveRadixTree_Get(t *testing.T) {
@@ -34,14 +42,17 @@ func TestAdaptiveRadixTree_Get(t *testing.T) {
 func TestAdaptiveRadixTree_Delete(t *testing.T) {
 	art := NewART()
 
-	res1 := art.Delete([]byte("not exist"))
-	t.Log(res1)
-	assert.Equal(t, res1, false)
+	res1, ok1 := art.Delete([]byte("not exist"))
+	assert.Nil(t, res1)
+	assert.False(t, ok1)
 
 	art.Put([]byte("key-1"), &data.LogRecordPos{Fid: 1, Offset: 12})
-	res2 := art.Delete([]byte("key-1"))
+	res2, ok2 := art.Delete([]byte("key-1"))
+	assert.True(t, ok2)
 	t.Log(res2)
-	assert.Equal(t, res2, true)
+	assert.Equal(t, uint32(1), res2.Fid)
+	assert.Equal(t, int64(12), res2.Offset)
+
 	pos1:= art.Get([]byte("key-1"))
 	t.Log(pos1)
 	assert.Nil(t, pos1)

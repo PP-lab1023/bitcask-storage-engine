@@ -11,17 +11,22 @@ func TestBTree_Put(t *testing.T) {
 	bt := NewBTree()
 
 	res1 := bt.Put(nil, &data.LogRecordPos{Fid: 1, Offset: 100})
-	assert.True(t, res1)
+	assert.Nil(t, res1)
 
 	res2 := bt.Put([]byte("a"), &data.LogRecordPos{Fid: 1, Offset: 2})
-	assert.True(t, res2)
+	assert.Nil(t, res2)
+
+	res3 := bt.Put([]byte("a"), &data.LogRecordPos{Fid: 1, Offset: 3})
+	t.Log(res3)
+	assert.Equal(t, res3.Fid, uint32(1))
+	assert.Equal(t, res3.Offset, int64(2))
 }
 
 func TestBTree_Get(t *testing.T) {
 	bt := NewBTree()
 
 	res1 := bt.Put(nil, &data.LogRecordPos{Fid: 1, Offset: 100})
-	assert.True(t, res1)
+	assert.Nil(t, res1)
 
 	pos1 := bt.Get(nil)
 	assert.Equal(t, uint32(1), pos1.Fid)
@@ -29,9 +34,10 @@ func TestBTree_Get(t *testing.T) {
 
 	// Test if Get works after changing the value of a key
 	res2 := bt.Put([]byte("a"), &data.LogRecordPos{Fid: 1, Offset: 2})
-	assert.True(t, res2)
+	assert.Nil(t, res2)
 	res3 := bt.Put([]byte("a"), &data.LogRecordPos{Fid: 1, Offset: 3})
-	assert.True(t, res3)
+	assert.Equal(t, res3.Fid, uint32(1))
+	assert.Equal(t, res3.Offset, int64(2))
 	
 	pos2 := bt.Get([]byte("a"))
 	assert.Equal(t, uint32(1), pos2.Fid)
@@ -41,14 +47,18 @@ func TestBTree_Get(t *testing.T) {
 func TestBTree_Delete(t *testing.T) {
 	bt := NewBTree()
 	res1 := bt.Put(nil, &data.LogRecordPos{Fid: 1, Offset: 100})
-	assert.True(t, res1)
-	res2 := bt.Delete(nil)
-	assert.True(t, res2)
+	assert.Nil(t, res1)
+	res2, ok1 := bt.Delete(nil)
+	assert.Equal(t, res2.Fid, uint32(1))
+	assert.Equal(t, res2.Offset, int64(100))
+	assert.True(t, ok1)
 
 	res3 := bt.Put([]byte("aaa"), &data.LogRecordPos{Fid: 22, Offset: 33})
-	assert.True(t, res3)
-	res4 := bt.Delete([]byte("aaa"))
-	assert.True(t, res4)
+	assert.Nil(t, res3)
+	res4, ok2 := bt.Delete([]byte("aaa"))
+	assert.True(t, ok2)
+	assert.Equal(t, res4.Fid, uint32(22))
+	assert.Equal(t, res4.Offset, int64(33))
 }
 
 func TestBTree_Iterator(t *testing.T) {

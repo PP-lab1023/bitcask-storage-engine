@@ -11,13 +11,13 @@ import (
 // set it as interface to use various data structure
 type Indexer interface {
 	// Put a key-value into keydir
-	Put(key []byte, pos *data.LogRecordPos) bool
+	Put(key []byte, pos *data.LogRecordPos) *data.LogRecordPos
 
 	// Get a value from key in keydir
 	Get(key []byte) *data.LogRecordPos
 
 	// Delete a key-value from keydir
-	Delete(key []byte) bool
+	Delete(key []byte) (*data.LogRecordPos, bool)
 
 	// Amount of data in the indexer
 	Size() int

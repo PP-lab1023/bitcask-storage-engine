@@ -21,6 +21,9 @@ type Options struct {
 
 	// Use mmap when start up?
 	MMapAtStartUp bool
+
+	// Threshold for data file merging
+	DataFileMergeRatio float32
 }
 
 type IndexerType = int8
@@ -42,6 +45,7 @@ var DefaultOptions = Options{
 	BytesPerSync: 0,
 	IndexType: Btree,
 	MMapAtStartUp: true,
+	DataFileMergeRatio: 0.5,
 }
 
 // Options of iterator

@@ -2,6 +2,7 @@ package kvproject
 
 import (
 	"bitcask-go/data"
+	"bitcask-go/utils"
 	"io"
 	"os"
 	"path"
@@ -29,6 +30,29 @@ func (db *DB) Merge() error {
 		db.mu.Unlock()
 		return ErrMergeIsInProgress
 	}
+
+	// Check if the merge data volume reaches the threshold
+	totalSize, err := utils.DirSize(db.options.DirPath)
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	if float32(db.reclaimSize) / float32(totalSize) < db.options.DataFileMergeRatio {
+		db.mu.Unlock()
+		return ErrMergeRatioUnreached
+	}
+
+	// Check if the remaining disk space can hold all the data during merge
+	availableDiskSize, err := utils.AvailableDiskSize()
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	if uint64(totalSize - db.reclaimSize) >= availableDiskSize {
+		db.mu.Unlock()
+		return ErrNoEnoughSpaceForMerge
+	}
+
 	db.isMerging = true
 	defer func() {
 		db.isMerging = false
@@ -192,6 +216,9 @@ func (db *DB) loadMergeFiles() error {
 		if entry.Name() == data.SeqNoFileName {
 			// It is meaningless to move this file
 			// Because maybe there's new seqNo produced during merge
+			continue
+		}
+		if entry.Name() == fileLockName {
 			continue
 		}
 		// All the files in the merge directory are in mergeFileNames, 

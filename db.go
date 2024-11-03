@@ -4,6 +4,7 @@ import (
 	"bitcask-go/data"
 	"bitcask-go/fio"
 	"bitcask-go/index"
+	"bitcask-go/utils"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,14 @@ type DB struct {
 	isinitial bool							// Is it the first time tp initialize the database?
 	fileLock *flock.Flock					// File lock ensures mutual exclusion between multiple processes
 	bytesWrite uint							// The number of bytes have been written so far
+	reclaimSize int64                       // The number of size which are invalid
+}
+
+type Stat struct {
+	KeyNum uint                             // Number of key in the database
+	DataFileNum uint                        // Number of datafiles on the disk
+	ReclaimableSize int64                   // Bytes that can be reclaimed
+	DiskSize int64                          // Amount of disk space
 }
 
 // Open bitcask storage engine instance
@@ -149,6 +158,10 @@ func checkOptions(options Options) error {
 		return errors.New("database data file size must be positive")
 	}
 
+	if options.DataFileMergeRatio < 0 || options.DataFileMergeRatio > 1 {
+		return errors.New("invalid merge ratio, must between 0 and 1")
+	}
+
 	return nil
 }
 
@@ -173,8 +186,8 @@ func (db *DB) Put(key []byte, value []byte) error{
 	}
 
 	// Renew in-memory index
-	if ok := db.index.Put(key, pos); !ok {
-		return ErrIndexUpdateFailed
+	if oldPos := db.index.Put(key, pos); oldPos != nil {
+		db.reclaimSize += int64(oldPos.Size)
 	}
 
 	return nil
@@ -199,15 +212,20 @@ func (db *DB) Delete(key []byte) error{
 		Key: logRecordKeyWithSeq(key, nonTransactionSeqNo), 
 		Type: data.LogRecordDeleted,
 	}
-	_, err := db.appendLogRecordWithLock(logRecord)
+	pos, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
+	// The deleted data can be reclaimed
+	db.reclaimSize += int64(pos.Size)
 
 	// Delete the key in the in-memory index
-	ok := db.index.Delete(key)
+	oldPos, ok := db.index.Delete(key)
 	if !ok {
 		return ErrIndexUpdateFailed
+	}
+	if oldPos != nil {
+		db.reclaimSize += int64(oldPos.Size)
 	}
 
 	return nil
@@ -362,7 +380,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	}
 
 	// Construct LogRecordPos and return 
-	pos := &data.LogRecordPos{Fid: db.activeFile.FileId, Offset: writeOff}
+	pos := &data.LogRecordPos{Fid: db.activeFile.FileId, Offset: writeOff, Size: uint32(size)}
 	return pos, nil
 }
 
@@ -457,14 +475,16 @@ func (db *DB) loadIndexFromDataFiles() error {
 	// Put data to the indexer
 	// Key should not contain seqNo
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
-		var ok bool
+		var oldPos *data.LogRecordPos
 		if typ == data.LogRecordDeleted {
-			ok = db.index.Delete(key)
+			oldPos, _ = db.index.Delete(key)
+			// Delted data itself can be reclaimed
+			db.reclaimSize += int64(pos.Size)
 		} else if typ == data.LogRecordNormal{
-			ok = db.index.Put(key, pos)
+			oldPos = db.index.Put(key, pos)
 		}
-		if !ok {
-			panic("fail to update index at startup")
+		if oldPos != nil {
+			db.reclaimSize += int64(oldPos.Size)
 		}
 	}
 
@@ -505,7 +525,7 @@ func (db *DB) loadIndexFromDataFiles() error {
 			}
 
 			// Construct in-memory index
-			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
+			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset, Size: uint32(size)}
 
 			// Decode key and get transaction serial number
 			realKey, seqNo := parseLogRecordKey(logRecord.Key)
@@ -657,4 +677,26 @@ func (db *DB) resetIoType() error {
 		}
 	}
 	return nil
+}
+
+// Return some information of database
+func (db *DB) Stat() *Stat {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var dataFiles = uint(len(db.olderFiles))
+	if db.activeFile != nil {
+		dataFiles += 1
+	}
+
+	dirSize, err := utils.DirSize(db.options.DirPath)
+	if err != nil {
+		panic(fmt.Sprintf("failed to get directory size: %v", err))
+	}
+	return &Stat {
+		KeyNum: uint(db.index.Size()),
+		DataFileNum: dataFiles,
+		ReclaimableSize: db.reclaimSize,
+		DiskSize: dirSize,
+	}
 }
