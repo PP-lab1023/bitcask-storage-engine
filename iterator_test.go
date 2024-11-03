@@ -19,6 +19,8 @@ func TestDB_NewIterator(t *testing.T) {
 	assert.NotNil(t, db)
 
 	iterator := db.NewIterator(DefaultIteratorOptions)
+	defer iterator.Close()
+
 	assert.NotNil(t, iterator)
 	t.Log(iterator.Valid())
 	assert.Equal(t, false, iterator.Valid())
@@ -38,6 +40,8 @@ func TestDB_Iterator_One_Value(t *testing.T) {
 	assert.Nil(t, err)
 
 	iterator := db.NewIterator(DefaultIteratorOptions)
+	defer iterator.Close()
+
 	assert.NotNil(t, iterator)
 	t.Log(iterator.Valid())
 	assert.Equal(t, true, iterator.Valid())
@@ -71,6 +75,7 @@ func TestDB_Iterator_Many_Values(t *testing.T) {
 
 	// Iterate
 	Iter1 := db.NewIterator(DefaultIteratorOptions)
+
 	for Iter1.Rewind(); Iter1.Valid(); Iter1.Next() {
 		t.Log("key = ", string(Iter1.Key()))
 		assert.NotNil(t, Iter1.Key())
@@ -80,11 +85,13 @@ func TestDB_Iterator_Many_Values(t *testing.T) {
 		t.Log("key = ", string(Iter1.Key()))
 		assert.NotNil(t, Iter1.Key())
 	}
+	Iter1.Close()
 
 	// Reverse iterate
 	IterOpts1 := DefaultIteratorOptions
 	IterOpts1.Reverse = true
 	Iter2 := db.NewIterator(IterOpts1)
+
 	for Iter2.Rewind(); Iter2.Valid(); Iter2.Next() {
 		t.Log("key = ", string(Iter2.Key()))
 		assert.NotNil(t, Iter2.Key())
@@ -94,15 +101,18 @@ func TestDB_Iterator_Many_Values(t *testing.T) {
 		t.Log("key = ", string(Iter2.Key()))
 		assert.NotNil(t, Iter2.Key())
 	}
+	Iter2.Close()
 
 	// Have prefix
 	IterOpts2 := DefaultIteratorOptions
 	IterOpts2.Prefix = []byte("ann")
 	Iter3 := db.NewIterator(IterOpts2)
+
 	for Iter3.Rewind(); Iter3.Valid(); Iter3.Next() {
 		t.Log("key = ", string(Iter3.Key()))
 		assert.NotNil(t, Iter3.Key())
 	}
+	Iter3.Close()
 
 }
 

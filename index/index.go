@@ -24,6 +24,9 @@ type Indexer interface {
 
 	// Get iterator
 	Iterator(reverse bool) Iterator
+
+	// Close iterator (for B+ tree, because B+ tree itself is a database)
+	Close() error
 }
 
 type IndexType = int8
@@ -33,16 +36,20 @@ const (
 
 	// Adaptive radix tree
 	ART
+
+	// B+ tree
+	BPTree
 )
 
 // Initialize index according to the IndexType
-func NewIndexer(typ IndexType) Indexer {
+func NewIndexer(typ IndexType, dirPath string, sync bool) Indexer {
 	switch typ {
 	case Btree:
 		return NewBTree()
 	case ART:
-		// todo
-		return nil
+		return NewART()
+	case BPTree:
+		return NewBPlusTree(dirPath, sync)
 	default:
 		panic("unsupported index type")
 	}

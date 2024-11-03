@@ -22,6 +22,14 @@ type WriteBatch struct {
 
 // Initialize write batch
 func (db *DB) NewWriteBatch(opts WriteBatchOptions) *WriteBatch {
+	if db.options.IndexType == BPlusTree && !db.seqNoFileExists && !db.isinitial{
+		// Cannot get the latest seqNo
+		// Forbid WriteBatch
+		// It is possible that user uses B+ tree when it is the first time to initialize the database. 
+		// If there's no isinitial to judge, because there's no seqNoFile, panic
+		panic("cannot use write batch, seq no file not exists")
+	}
+
 	return &WriteBatch{
 		options: opts,
 		mu: new(sync.Mutex),

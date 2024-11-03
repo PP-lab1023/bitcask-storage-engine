@@ -13,6 +13,8 @@ import (
 	"sync"
 )
 
+const seqNoKey = "seq.no"
+
 // Database-oriented interface
 type DB struct {
 	options Options
@@ -23,6 +25,8 @@ type DB struct {
 	index index.Indexer
 	seqNo uint64							// Transaction serial number
 	isMerging bool							// Only one merge is allowed at the same time
+	seqNoFileExists bool					// The file which saves seqNo exists?
+	isinitial bool							// Is it the first time tp initialize the database?
 }
 
 // Open bitcask storage engine instance
@@ -31,21 +35,36 @@ func Open(options Options) (*DB, error) {
 	if err := checkOptions(options); err != nil {
 		return nil, err
 	}
+
+	var isinitial bool
 	
 	// Judge if DirPath exists
 	// If not exits, construct
 	if _, err := os.Stat(options.DirPath); os.IsNotExist(err) {
+		// The path doesn't exist. Must be the first time to initialize database
+		isinitial = true
 		if err := os.MkdirAll(options.DirPath, os.ModePerm); err != nil {
 			return nil, err
 		}
 	}
+	entries, err := os.ReadDir(options.DirPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		// Although the path exists, it's empty
+		// ALso means the first time to initialize database
+		isinitial = true
+	}
+
 
 	// Initialize DB instance
 	db := &DB{
 		options: options,
 		mu: new(sync.RWMutex),
 		olderFiles: make(map[uint32]*data.DataFile),
-		index: index.NewIndexer(options.IndexType),
+		index: index.NewIndexer(options.IndexType, options.DirPath, options.SyncWrite),
+		isinitial: isinitial,
 	}
 
 	// Load merge directory
@@ -60,14 +79,32 @@ func Open(options Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Load data from hint file
-	if err := db.loadIndexFromHintFile(); err != nil {
-		return nil, err
-	}
+	// B+ tree stores indexes on the disk. No need to load
+	if options.IndexType != BPlusTree{
+		// Load data from hint file
+		if err := db.loadIndexFromHintFile(); err != nil {
+			return nil, err
+		}
 
-	// Load index from data files
-	if err := db.loadIndexFromDataFiles(); err != nil {
-		return nil, err
+		// Load index from data files
+		if err := db.loadIndexFromDataFiles(); err != nil {
+			return nil, err
+		}
+	} else {
+		// Get current seqNo
+		if err := db.loadSeqNo(); err != nil {
+			return nil, err
+		}
+
+		// If it's not B+ tree, loadIndexFromDataFiles() update the Writeoff in the active file
+		// For B+ tree, this should be updated manually
+		if db.activeFile != nil {
+			size, err := db.activeFile.IoManager.Size()
+			if err != nil {
+				return nil, err
+			}
+			db.activeFile.WriteOff = size
+		}
 	}
 
 	return db, nil
@@ -171,6 +208,8 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // Get all the keys in the database
 func (db *DB) ListKeys() [][]byte {
 	iterator := db.index.Iterator(false)
+	defer iterator.Close()
+
 	keys := make([][]byte, db.index.Size())
 	var idx int
 	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
@@ -187,6 +226,8 @@ func (db *DB) Fold(fn func(key []byte, value []byte) bool) error {
 	defer db.mu.RUnlock()
 
 	iterator := db.index.Iterator(false)
+	defer iterator.Close()
+
 	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
 		value, err := db.getValueByPosition(iterator.Value())
 		if err != nil {
@@ -468,6 +509,30 @@ func (db *DB) loadIndexFromDataFiles() error {
 	return nil
 }
 
+func (db *DB) loadSeqNo() error {
+	fileName := filepath.Join(db.options.DirPath, data.SeqNoFileName)
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		return nil
+	}
+
+	seqNoFile, err := data.OpenSeqNoFile(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+
+	record, _, err := seqNoFile.ReadLogRecord(0)
+	if err != nil {
+		return err
+	}
+	seqNo, err := strconv.ParseUint(string(record.Value), 10, 64)
+	if err != nil {
+		return err
+	}
+	db.seqNo = seqNo
+	db.seqNoFileExists = true
+	return os.Remove(fileName)
+}
+
 // Close the database
 func (db *DB) Close() error {	
 	if db.activeFile == nil {
@@ -475,6 +540,31 @@ func (db *DB) Close() error {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// For B+ tree, because B+ tree itself is a database
+	// It needs to close index
+	if err := db.index.Close(); err != nil {
+		return err
+	}
+
+	// Save current seqNo
+	// B+ tree doesn't load index when open
+	// So it cannot get the latest seqNo
+	seqNoFIle, err := data.OpenSeqNoFile(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+	record := &data.LogRecord{
+		Key: []byte(seqNoKey),
+		Value: []byte(strconv.FormatUint(db.seqNo, 10)),
+	}
+	encRecord, _ := data.EncodeLogRecord(record)
+	if err := seqNoFIle.Write(encRecord); err != nil {
+		return err
+	}
+	if err := seqNoFIle.Sync(); err != nil {
+		return err
+	}
 
 	//	Close current active file
 	if err := db.activeFile.Close(); err != nil {

@@ -189,6 +189,11 @@ func (db *DB) loadMergeFiles() error {
 		if entry.Name() == data.MergeFinishedFileName {
 			mergeFinished = true
 		} 
+		if entry.Name() == data.SeqNoFileName {
+			// It is meaningless to move this file
+			// Because maybe there's new seqNo produced during merge
+			continue
+		}
 		// All the files in the merge directory are in mergeFileNames, 
 		// including the hint file and the MergeFinishedFile
 		// They will be moved to replace those merged old files

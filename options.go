@@ -24,6 +24,9 @@ const (
 
 	// Adaptive radix tree
 	ART
+
+	// B+ tree, store indexes on the disk
+	BPlusTree
 )
 
 var DefaultOptions = Options{
