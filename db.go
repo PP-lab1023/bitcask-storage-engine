@@ -68,7 +68,7 @@ func Open(options Options) (*DB, error) {
 
 	// Judge if current path is in use
 	fileLock := flock.New(filepath.Join(options.DirPath, fileLockName))
-	hold, err := fileLock.TryLock()
+	hold, err := fileLock.TryLock()  // This method will create a lock file
 	if err != nil {
 		return nil, err
 	}
@@ -699,4 +699,12 @@ func (db *DB) Stat() *Stat {
 		ReclaimableSize: db.reclaimSize,
 		DiskSize: dirSize,
 	}
+}
+
+// Backup database
+func (db *DB) Backup(dir string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	return utils.CopyDic(db.options.DirPath, dir, []string{fileLockName})
 }
