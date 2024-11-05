@@ -84,3 +84,95 @@ func (rds *RedisDataStructure) Get(key []byte) ([]byte, error) {
 	return encValue[index:], nil
 }
 
+// ================ Hash data structure ================
+func (rds *RedisDataStructure) HSet(key, field, value []byte) (bool, error) {
+	// Find metadata, if not exist(ie. the hash has not been created before), create
+	meta, err := rds.findMetadata(key, Hash)
+	if err != nil {
+		return false, err
+	}
+
+	// Create key of the data put in hash
+	hk := &hashInternalKey{
+		key: key,
+		version: meta.version,
+		field: field,
+	}
+	encKey := hk.encode()
+
+	// Find if key exists(ie. Has the key been put in hash before?)
+	// If not exists, return true, otherwise false
+	var exist = true
+	if _, err = rds.db.Get(encKey); err == kvproject.ErrKeyNotFound {
+		exist = false
+	}
+
+	wb := rds.db.NewWriteBatch(kvproject.DefaultWriteBatchOptions)
+	// If not exist, need to do some updates
+	if !exist {
+		meta.size++
+		// Update hash's metadata
+		_ = wb.Put(key, meta.encode())
+	}
+	// Even if the key exists, its field may be changed
+	_ = wb.Put(encKey, value)
+	if err = wb.Commit(); err != nil {
+		return false, err
+	}
+	return !exist, nil
+}
+
+func (rds *RedisDataStructure) HGet(key, field []byte) ([]byte, error) {
+	meta, err := rds.findMetadata(key, Hash)
+	if err != nil {
+		return nil, err
+	}
+	if meta.size == 0 {
+		// There is no data in this hash
+		return nil, nil
+	}
+	
+	hk := &hashInternalKey{
+		key: key,
+		version: meta.version,
+		field: field,
+	}
+	encKey := hk.encode()
+
+	return rds.db.Get(encKey)
+}
+
+func (rds *RedisDataStructure) HDel(key, field []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, Hash)
+	if err != nil {
+		return false, err
+	}
+	if meta.size == 0 {
+		// There is no data in this hash
+		return false, nil
+	}
+
+	hk := &hashInternalKey{
+		key: key,
+		version: meta.version,
+		field: field,
+	}
+	encKey := hk.encode()
+
+	var exist = true
+	if _, err = rds.db.Get(encKey); err == kvproject.ErrKeyNotFound {
+		exist = false
+	}
+
+	if exist {
+		wb := rds.db.NewWriteBatch(kvproject.DefaultWriteBatchOptions)
+		meta.size--
+		_ = wb.Put(key, meta.encode())
+		_ = wb.Delete(encKey)
+		if err = wb.Commit(); err != nil {
+			return false, err
+		}
+	}
+
+	return exist, nil
+}
