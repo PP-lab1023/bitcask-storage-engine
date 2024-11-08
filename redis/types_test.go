@@ -171,3 +171,60 @@ func TestRedisDataStructure_SRem(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, ok)
 }
+
+// ================ List data structure ================
+func TestRedisDataStructure_LPop(t *testing.T) {
+	opts := kvproject.DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-redis-lpop")
+	opts.DirPath = dir
+	rds, err := NewReisDataStructure(opts)
+	assert.Nil(t, err)
+
+	res, err := rds.LPush(utils.GetTestKey(1), []byte("val-1"))
+	assert.Equal(t, res, uint32(1))
+	assert.Nil(t, err)
+	res, err = rds.LPush(utils.GetTestKey(1), []byte("val-1"))
+	assert.Equal(t, res, uint32(2))
+	assert.Nil(t, err)
+	res, err = rds.LPush(utils.GetTestKey(1), []byte("val-2"))
+	assert.Equal(t, res, uint32(3))
+	assert.Nil(t, err)
+
+	val, err := rds.LPop(utils.GetTestKey(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, val)
+	val, err = rds.LPop(utils.GetTestKey(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, val)
+	val, err = rds.LPop(utils.GetTestKey(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, val)
+}
+
+func TestRedisDataStructure_RPop(t *testing.T) {
+	opts := kvproject.DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-redis-rpop")
+	opts.DirPath = dir
+	rds, err := NewReisDataStructure(opts)
+	assert.Nil(t, err)
+
+	res, err := rds.RPush(utils.GetTestKey(1), []byte("val-1"))
+	assert.Equal(t, res, uint32(1))
+	assert.Nil(t, err)
+	res, err = rds.RPush(utils.GetTestKey(1), []byte("val-1"))
+	assert.Equal(t, res, uint32(2))
+	assert.Nil(t, err)
+	res, err = rds.RPush(utils.GetTestKey(1), []byte("val-2"))
+	assert.Equal(t, res, uint32(3))
+	assert.Nil(t, err)
+
+	val, err := rds.RPop(utils.GetTestKey(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, val)
+	val, err = rds.RPop(utils.GetTestKey(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, val)
+	val, err = rds.RPop(utils.GetTestKey(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, val)
+}
