@@ -176,3 +176,94 @@ func (rds *RedisDataStructure) HDel(key, field []byte) (bool, error) {
 
 	return exist, nil
 }
+
+// ================ Set data structure ================
+func (rds *RedisDataStructure) SAdd(key, member[]byte) (bool, error){
+	// Find metadata
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return false, err
+	}
+
+	// Construct key for member
+	sk := &setInternalKey{
+		key: key,
+		version: meta.version,
+		member: member,
+	}
+
+	var ok = false
+	if _, err = rds.db.Get(sk.encode()); err == kvproject.ErrKeyNotFound {
+		// The member not exist
+		wb := rds.db.NewWriteBatch(kvproject.DefaultWriteBatchOptions)
+		meta.size++
+		_ = wb.Put(key, meta.encode())
+		_ = wb.Put(sk.encode(), nil)
+		if err = wb.Commit(); err != nil {
+			return false, err
+		}
+		ok = true
+	}
+
+	return ok, nil
+}
+
+func (rds *RedisDataStructure) SIsmember(key, member[]byte) (bool, error) {
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return false, err
+	}
+	if meta.size == 0 {
+		// There's no member in the set
+		return false, nil
+	}
+
+	// Construct key for member
+	sk := &setInternalKey{
+		key: key,
+		version: meta.version,
+		member: member,
+	}
+
+	_, err = rds.db.Get(sk.encode())
+	if err != nil && err != kvproject.ErrKeyNotFound {
+		return false, err
+	}
+	if err == kvproject.ErrKeyNotFound {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (rds *RedisDataStructure) SRem(key, member[]byte) (bool, error) {
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return false, err
+	}
+	if meta.size == 0 {
+		// There's no member in the set
+		return false, nil
+	}
+
+	// Construct key for member
+	sk := &setInternalKey{
+		key: key,
+		version: meta.version,
+		member: member,
+	}
+
+	if _, err = rds.db.Get(sk.encode()); err == kvproject.ErrKeyNotFound {
+		// The member not exist
+		return false, nil
+	} 
+
+	// Update
+	wb := rds.db.NewWriteBatch(kvproject.DefaultWriteBatchOptions)
+	meta.size--
+	_ = wb.Put(key, meta.encode())
+	_ = wb.Delete(sk.encode())
+	if err = wb.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}

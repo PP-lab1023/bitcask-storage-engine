@@ -81,15 +81,45 @@ type hashInternalKey struct {
 	field []byte
 }
 
+type setInternalKey struct {
+	key []byte
+	version int64
+	member []byte
+}
+
 func (hk *hashInternalKey) encode() []byte {
 	buf := make([]byte, len(hk.key) + len(hk.field) + 8)
 	var index = 0
+	// key
 	copy(buf[index : index + len(hk.key)], hk.key)
 
+	// version
 	binary.LittleEndian.PutUint64(buf[index : index + 8], uint64(hk.version))
 	index += 8
 
+	// field
 	copy(buf[index:], hk.field)
 
+	return buf
+}
+
+func (sk *setInternalKey) encode() []byte {
+	buf := make([]byte, len(sk.key) + len(sk.member) + 8 + 4)
+	var index = 0
+	// key
+	copy(buf[index : index + len(sk.key)], sk.key)
+
+	// version
+	binary.LittleEndian.PutUint64(buf[index : index + 8], uint64(sk.version))
+	index += 8
+
+	// member
+	copy(buf[index:index + len(sk.member)], sk.member)
+	index += len(sk.member)
+
+
+	// key size
+	binary.LittleEndian.PutUint32(buf[index:], uint32(len(sk.member)))
+	
 	return buf
 }

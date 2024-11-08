@@ -114,3 +114,60 @@ func TestRedisDataStructure_HDel(t *testing.T) {
 	del2, err := rds.HDel(utils.GetTestKey(1), []byte("field2"))
 	t.Log(del2, err)
 }
+
+// ================ Set data structure ================
+func TestRedisDataStructure_SIsmember(t *testing.T) {
+	opts := kvproject.DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-redis-sismember")
+	opts.DirPath = dir
+	rds, err := NewReisDataStructure(opts)
+	assert.Nil(t, err)
+
+	ok, err := rds.SAdd(utils.GetTestKey(1), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+	ok, err = rds.SAdd(utils.GetTestKey(1), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	ok, err = rds.SAdd(utils.GetTestKey(1), []byte("val-2"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+
+	ok, err = rds.SIsmember(utils.GetTestKey(2), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	ok, err = rds.SIsmember(utils.GetTestKey(1), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+	ok, err = rds.SIsmember(utils.GetTestKey(1), []byte("val-2"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+	ok, err = rds.SIsmember(utils.GetTestKey(2), []byte("val-not-exist"))
+	assert.Nil(t, err)
+	assert.False(t, ok)
+}
+
+func TestRedisDataStructure_SRem(t *testing.T) {
+	opts := kvproject.DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-redis-srem")
+	opts.DirPath = dir
+	rds, err := NewReisDataStructure(opts)
+	assert.Nil(t, err)
+
+	ok, err := rds.SAdd(utils.GetTestKey(1), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+	ok, err = rds.SAdd(utils.GetTestKey(1), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	ok, err = rds.SAdd(utils.GetTestKey(1), []byte("val-2"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+
+	ok, err = rds.SRem(utils.GetTestKey(2), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.False(t, ok)
+	ok, err = rds.SRem(utils.GetTestKey(1), []byte("val-1"))
+	assert.Nil(t, err)
+	assert.True(t, ok)
+}
