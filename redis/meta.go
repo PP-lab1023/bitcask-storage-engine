@@ -109,6 +109,7 @@ func (sk *setInternalKey) encode() []byte {
 	var index = 0
 	// key
 	copy(buf[index : index + len(sk.key)], sk.key)
+	index += len(sk.key)
 
 	// version
 	binary.LittleEndian.PutUint64(buf[index : index + 8], uint64(sk.version))
@@ -137,7 +138,31 @@ func (lk *listInternalKey) encode() []byte {
 	index += 8
 
 	// index
-	binary.LittleEndian.PutUint64(buf[index:], uint64(lk.version))
+	binary.LittleEndian.PutUint64(buf[index:], uint64(lk.index))
 	
+	return buf
+}
+
+type zsetInternalKey struct {
+	key []byte
+	version int64
+	member []byte
+	score float64
+}
+
+func (zk *zsetInternalKey) encode() []byte {
+	buf := make([]byte, len(zk.key) + len(zk.member) + 8)
+	var index = 0
+	// key
+	copy(buf[index : index + len(zk.key)], zk.key)
+	index += len(zk.key)
+
+	// version
+	binary.LittleEndian.PutUint64(buf[index : index + 8], uint64(zk.version))
+	index += 8
+
+	// member
+	copy(buf[index:], zk.member)
+
 	return buf
 }

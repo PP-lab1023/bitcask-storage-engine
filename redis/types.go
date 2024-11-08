@@ -1,9 +1,12 @@
 package redis
 
 import (
-	kvproject "bitcask-go"
+	"bitcask-go"
+	"bitcask-go/utils"
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"strconv"
 	"time"
 )
 
@@ -25,7 +28,7 @@ const (
 )
 
 // Initialize redis service
-func NewReisDataStructure(options kvproject.Options) (*RedisDataStructure, error) {
+func NewRedisDataStructure(options kvproject.Options) (*RedisDataStructure, error) {
 	// The same as open a database
 	db, err := kvproject.Open(options)
 	if err != nil {
@@ -191,14 +194,18 @@ func (rds *RedisDataStructure) SAdd(key, member[]byte) (bool, error){
 		version: meta.version,
 		member: member,
 	}
-
+	
 	var ok = false
 	if _, err = rds.db.Get(sk.encode()); err == kvproject.ErrKeyNotFound {
 		// The member not exist
 		wb := rds.db.NewWriteBatch(kvproject.DefaultWriteBatchOptions)
 		meta.size++
 		_ = wb.Put(key, meta.encode())
-		_ = wb.Put(sk.encode(), nil)
+		
+		buf := sk.encode()	
+		_ = wb.Put(buf, nil)
+		
+
 		if err = wb.Commit(); err != nil {
 			return false, err
 		}
@@ -266,6 +273,37 @@ func (rds *RedisDataStructure) SRem(key, member[]byte) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (rds *RedisDataStructure) SMembers(key []byte) ([][]byte, error) {
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return nil, err
+	}
+	if meta.size == 0 {
+		// There's no member in the set
+		return nil, nil
+	}
+
+	// Construct prefix for member
+	sk := &setInternalKey{
+		key: key,
+		version: meta.version,
+	}
+	opt := kvproject.DefaultIteratorOptions
+	opt.Prefix = bytes.TrimRight(sk.encode(), "\x00")
+
+	// Iterate over to find all the members
+	var members [][]byte
+	it := rds.db.NewIterator(opt)
+	for it.Rewind(); it.Valid(); it.Next() {
+		key = it.Key()
+		
+		// Skip key and version
+		member := key[len(sk.key) + 8:]
+		members = append(members, member)
+	}
+	return members, nil
 }
 
 // ================ List data structure ================
@@ -359,3 +397,125 @@ func (rds *RedisDataStructure) LPop(key []byte) ([]byte, error){
 func (rds *RedisDataStructure) RPop(key []byte) ([]byte, error){
 	return rds.popInner(key, false)
 }
+
+// ================ ZSet data structure ================
+func (rds *RedisDataStructure) ZAdd(key []byte, score float64, member []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, ZSet)
+	if err != nil {
+		return false, err
+	}
+
+	// Construct key for member
+	zk := &zsetInternalKey{
+		key: key,
+		version: meta.version,
+		score: score,
+		member: member,
+	}
+
+	var exist = true
+	value, err := rds.db.Get(zk.encode())
+	if err != nil && err != kvproject.ErrKeyNotFound {
+		// Something goes wrong
+		return false, err
+	}
+	if err == kvproject.ErrKeyNotFound {
+		exist = false
+	}
+	if exist {
+		// The member exists and its score doesn't change
+		if score == utils.Float64FromBytes(value) {
+			return false, nil
+		}
+	}
+
+	// Update
+	wb := rds.db.NewWriteBatch(kvproject.DefaultWriteBatchOptions)
+	if !exist {
+		meta.size++
+		_ = wb.Put(key, meta.encode())
+	} else {
+		oldKey := &zsetInternalKey{
+			key: key,
+			version: meta.version,
+			member: member,
+			score: utils.Float64FromBytes(value),
+		}
+		// Must delete the old key, or this old key will be found when iterating
+		_ = wb.Delete(oldKey.encode())
+	}
+	_ = wb.Put(zk.encode(), utils.Float64ToBytes(score))
+	if err = wb.Commit(); err != nil {
+		return false, err
+	}
+
+	return !exist, nil
+}
+
+func (rds *RedisDataStructure) ZScore(key []byte, member []byte) (float64, error) {
+	meta, err := rds.findMetadata(key, ZSet)
+	if err != nil {
+		// Don't support negative score
+		return -1, err
+	}
+	if meta.size == 0 {
+		return -1, nil
+	}
+
+	// Construct key for member
+	zk := &zsetInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+	}
+
+	value, err := rds.db.Get(zk.encode())
+	if err != nil {
+		return -1, err
+	}
+
+	return utils.Float64FromBytes(value), nil
+}
+
+func (rds *RedisDataStructure) ZPopmax(key []byte) ([]byte, error) {
+	meta, err := rds.findMetadata(key, ZSet)
+	if err != nil {
+		return nil, err
+	}
+	if meta.size == 0 {
+		// There's no member in the set
+		return nil, nil
+	}
+	// Construct prefix for member
+	zk := &zsetInternalKey{
+		key: key,
+		version: meta.version,
+	}
+	opt := kvproject.DefaultIteratorOptions
+	opt.Prefix = bytes.TrimRight(zk.encode(), "\x00")
+
+	// Iterate over to find the member with the biggest score
+	it := rds.db.NewIterator(opt)
+	var score = -1
+	var member []byte
+	for it.Rewind(); it.Valid(); it.Next() {
+		buf, err := it.Value()
+		if err != nil {
+			return nil, err
+		}
+
+		val, err := strconv.Atoi(string(buf))
+		if err != nil {
+			return nil, err
+		}
+
+		if val > score {
+			score = val
+			key = it.Key()
+			// Skip key and version
+			member = key[len(zk.key) + 8:]
+		}
+	}
+	return member, nil
+}
+
